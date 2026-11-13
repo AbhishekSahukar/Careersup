@@ -1,0 +1,1 @@
+{"name": "JobPilot", "icon": "🚀", "description": "Job-hunt dashboard: CV/cover-letter PDF→HTML, JD match score, approved CV edits, tailored cover letters (OpenRouter), job discovery + autopilot. Needs the Rust backend (run start.bat) on port 3100.", "kind": "static", "entry": "index.html"}
