@@ -60,10 +60,10 @@ const scc=s=>s==null?"":s>=75?"hi":s>=50?"mid":"lo";
 const exportPdf=(u,b)=>busy(b,async()=>{const r=await api(u,{method:"POST"});toast("PDF saved: "+r.path)});
 const busy=async(b,f)=>{const t=b.innerHTML;b.disabled=true;b.innerHTML='<span class="spin"></span> Working…';try{await f()}catch(e){toast(e.message,1)}finally{b.disabled=false;b.innerHTML=t}};
 async function load(){S=await api("/api/state");render()}
-function nav(){const items=[["dashboard","📊","Dashboard"],["analyze","🎯","Analyze a JD"],["discover","🔎","Discover & Autopilot"],["jobs","🗂️","All jobs"],["docs","📄","My documents"],["settings","⚙️","Settings"]];
+function nav(){const items=[["dashboard","📊","Dashboard"],["batch","📥","Daily batch (Excel)"],["audit","🧭","Skills audit"],["analyze","🎯","Analyze a JD"],["discover","🔎","Discover & Autopilot"],["jobs","🗂️","All jobs"],["docs","📄","My documents"],["settings","⚙️","Settings"]];
 $("#nav").innerHTML=items.map(([k,i,l])=>`<button class="${view==k?"on":""}" onclick="go('${k}')">${i} ${l}</button>`).join("")}
 function go(v,id){view=v;if(id){cur=id;tab="analysis"}render();window.scrollTo(0,0)}
-function render(){nav();({dashboard,analyze,discover,jobs:jobsView,docs,settings,job:jobView})[view]()}
+function render(){nav();({dashboard,batch,audit,analyze,discover,jobs:jobsView,docs,settings,job:jobView})[view]()}
 const todayN=()=>S.jobs.filter(j=>j.applied_at&&new Date(j.applied_at).toDateString()==new Date().toDateString()).length;
 
 function dashboard(){
@@ -115,7 +115,7 @@ async function jobView(){
   if(!j.has_docs){tb.innerHTML='<div class="card sub">Approve edits in “Match & edits” to generate this.</div>';return}
   tb.innerHTML=`${j.auto?'<div class="pill warn" style="margin-bottom:8px">Auto-drafted by Autopilot – please review before applying</div>':""}
    ${j.warnings_list?.map(w=>`<div class="card" style="border-color:var(--warn);margin-bottom:10px">⚠️ ${esc(w)}</div>`).join("")||""}
-   <div class="row" style="margin-bottom:10px"><button class="btn sm" onclick="exportPdf('/api/export/job/${j.id}/${k}',this)">⬇️ Save as PDF</button><a class="btn ghost sm" target="_blank" href="${link(k)}">Open</a><div class="sp"></div>${j.url?`<a class="btn sm" target="_blank" href="${esc(j.url)}" onclick="mark('${j.id}')">Apply on site ↗</a>`:""}</div>
+   <div class="row" style="margin-bottom:10px"><button class="btn sm" onclick="exportPdf('/api/export/job/${j.id}/${k}',this)">⬇️ Save as PDF</button><button class="btn sm" onclick="saveFolder('${j.id}',this)">📁 Save to company folder</button><a class="btn ghost sm" target="_blank" href="${link(k)}">Open</a><div class="sp"></div>${j.url?`<a class="btn sm" target="_blank" href="${esc(j.url)}" onclick="mark('${j.id}')">Apply on site ↗</a>`:""}</div>
    <iframe class="prev" sandbox src="${link(k)}"></iframe>`}
  else if(tab=="jd")tb.innerHTML=`<div class="card" style="white-space:pre-wrap">${esc(j.jd)}</div>`;
  else{tb.innerHTML=`<div class="card"><textarea id="nt" style="min-height:160px">${esc(j.notes)}</textarea><div style="margin-top:10px"><button class="btn" id="sv">Save notes</button></div></div>`;$("#sv").onclick=async()=>{await api("/api/jobs/"+j.id,{method:"PATCH",body:{notes:$("#nt").value}});toast("Saved")}}
@@ -158,10 +158,58 @@ function settings(){const s=S.settings;
  $("#main").innerHTML=`<h1>Settings</h1><div class="sub">Everything runs locally; only text is sent to OpenRouter.</div><div class="card" style="max-width:640px">
  <label>OpenRouter API key ${s.has_key?'<span class="pill ok">saved</span>':'<span class="pill bad">not set</span>'}</label><input id="k" type="password" placeholder="sk-or-… (leave blank to keep current)">
  <label>Model</label><input id="m" value="${esc(s.model)}"><small class="sub">Default: deepseek/deepseek-v4-flash (any OpenRouter model id works)</small>
+ <label>Output folder for daily batches</label><input id="od" value="${esc(s.output_dir)}"><small class="sub">Each company gets its own sub-folder (inside a folder per day) with JD, CV and cover letter.</small>
  <label>Daily application goal</label><input id="g" type="number" value="${s.daily_goal}">
  <label class="row" style="color:var(--tx)"><input type="checkbox" id="ap" style="width:auto" ${s.auto_prepare?"checked":""}> Autopilot auto-drafts CV + cover letter for strong matches</label>
  <label>Auto-draft threshold (score ≥)</label><input id="th" type="number" min="0" max="100" value="${s.auto_threshold}">
  <div style="margin-top:16px"><button class="btn" id="sv">Save</button></div></div>`;
- $("#sv").onclick=e=>busy(e.target,async()=>{await api("/api/settings",{method:"PUT",body:{api_key:$("#k").value,model:$("#m").value,daily_goal:+$("#g").value,auto_prepare:$("#ap").checked,auto_threshold:+$("#th").value}});await load();toast("Saved")})}
+ $("#sv").onclick=e=>busy(e.target,async()=>{await api("/api/settings",{method:"PUT",body:{api_key:$("#k").value,model:$("#m").value,daily_goal:+$("#g").value,output_dir:$("#od").value,auto_prepare:$("#ap").checked,auto_threshold:+$("#th").value}});await load();toast("Saved")})}
+const saveFolder=(id,b)=>busy(b,async()=>{const r=await api(`/api/jobs/${id}/folder`,{method:"POST"});await load();toast("Saved to "+r.path)});
+const arr=x=>Array.isArray(x)?x:[];
+const jobsToday=()=>S.jobs.filter(j=>j.source=="excel"&&new Date(j.created).toDateString()==new Date().toDateString());
+
+function batch(){
+ $("#main").innerHTML=`<h1>Daily batch</h1><div class="sub">Upload today's Excel → for every row JobPilot scores the JD, tailors your CV (only with what is in it), writes the cover letter and saves everything in a folder named after the company. Then you just open each folder and apply.</div>
+ <div class="card"><label>Output folder</label><div class="row"><input id="od" style="flex:1;min-width:260px" value="${esc(S.settings.output_dir)}"><button class="btn ghost" id="sod">Save</button><button class="btn ghost" id="oo">📂 Open</button></div>
+ <div class="drop" id="bz" style="margin-top:14px">Drop your <b>.xlsx</b> here or <label class="btn sm" style="display:inline-block;margin:0">choose file<input type="file" accept=".xlsx,.xls" hidden id="bf"></label><br>
+ <small>Columns (first row = headers): <b>Company</b>, <b>Job Description</b> (both needed) · optional: <b>Job Title</b>, <b>Apply URL</b></small></div></div>
+ <div id="bt" style="margin-top:18px"></div>`;
+ $("#sod").onclick=async()=>{await api("/api/settings",{method:"PUT",body:{output_dir:$("#od").value}});await load();toast("Folder saved")};
+ $("#oo").onclick=()=>api("/api/open-output",{method:"POST"}).catch(e=>toast(e.message,1));
+ const up=async f=>{if(!f)return;const z=$("#bz");z.innerHTML='<span class="spin"></span> Reading Excel…';
+  try{await api("/api/settings",{method:"PUT",body:{output_dir:$("#od").value}});const fd=new FormData();fd.append("file",f);const r=await api("/api/batch",{method:"POST",body:fd});
+   toast(`${r.started} job(s) processing`+(r.duplicates?`, ${r.duplicates} already done`:"")+(r.skipped?`, ${r.skipped} row(s) skipped (no JD)`:""));await load();batchPoll()}
+  catch(e){toast(e.message,1)}finally{batch()}};
+ $("#bf").onchange=e=>up(e.target.files[0]);const dz=$("#bz");dz.ondragover=e=>{e.preventDefault();dz.classList.add("over")};dz.ondragleave=()=>dz.classList.remove("over");dz.ondrop=e=>{e.preventDefault();up(e.dataTransfer.files[0])};
+ batchTable();if(S.jobs.some(j=>j.busy))batchPoll()}
+function batchTable(){const el=$("#bt");if(!el)return;const L=jobsToday().sort((a,b)=>(b.score??-1)-(a.score??-1));
+ if(!L.length){el.innerHTML="";return}
+ const done=L.filter(j=>j.folder&&!j.busy).length,act=L.filter(j=>j.busy).length;
+ el.innerHTML=`<div class="card"><div class="row"><h2 style="margin:0">Today's batch</h2><span class="pill ok">${done} ready</span>${act?`<span class="pill acc"><span class="spin"></span> ${act} working</span>`:""}<div class="sp"></div><button class="btn ghost sm" onclick="go('audit')">🧭 See skills audit →</button></div>
+ <div class="bar"><i style="width:${done/L.length*100}%"></i></div>
+ <table style="margin-top:10px"><tr><th>Match</th><th>Company</th><th>Role</th><th>Status</th><th></th></tr>${L.map(j=>`<tr class="h" onclick="go('job','${j.id}')"><td class="sc ${scc(j.score)}">${j.score??"–"}</td><td><b>${esc(j.company||"—")}</b></td><td>${esc(j.title)}</td>
+ <td>${j.busy?'<span class="spin"></span> Working…':j.error?`<span class="pill bad" title="${esc(j.error)}">Failed – open to retry</span>`:j.folder?'<span class="pill ok">Folder ready</span>':'<span class="pill">Queued</span>'}${j.warnings?` <span class="pill warn">${j.warnings} to check</span>`:""}${j.applied_at?' <span class="pill acc">applied</span>':""}</td>
+ <td onclick="event.stopPropagation()" class="row" style="flex-wrap:nowrap">${j.folder&&!j.busy?`<button class="btn ghost sm" onclick="api('/api/jobs/${j.id}/open',{method:'POST'}).catch(e=>toast(e.message,1))">📂 Folder</button>`:""}${j.url?`<a class="btn sm" href="${esc(j.url)}" target="_blank" onclick="mark('${j.id}')">Apply ↗</a>`:""}</td></tr>`).join("")}</table>
+ <small class="sub">Documents are auto-drafted: skim each one before sending (open a row to preview CV and cover letter).</small></div>`}
+function batchPoll(){clearInterval(poll);poll=setInterval(async()=>{if(view!="batch"){clearInterval(poll);return}S=await api("/api/state");batchTable();if(!S.jobs.some(j=>j.busy)){clearInterval(poll);toast("Batch finished – folders are ready");setTimeout(()=>{if(view=="audit")audit()},0)}},3000)}
+
+async function audit(){
+ $("#main").innerHTML=`<h1>Skills audit</h1><div class="sub">What the job descriptions keep asking for, what your CV doesn't show yet, what to learn and which projects to build. Advice only – nothing here is ever added to your CV.</div>
+ <div class="row"><button class="btn" id="a1">🧭 Audit today's batch</button><button class="btn ghost" id="a2">Audit all analyzed jobs</button></div><div id="ab" style="margin-top:18px"><span class="spin"></span></div>`;
+ const run=sc=>e=>busy(e.target,async()=>{await api("/api/audit",{method:"POST",body:{scope:sc}});toast("Audit updated");audit()});
+ $("#a1").onclick=run("today");$("#a2").onclick=run("all");
+ const a=await api("/api/audit").catch(()=>({}));const ad=a.advice;if(view!="audit")return;
+ if(!ad){$("#ab").innerHTML='<div class="card sub">No audit yet. Upload a daily batch (it runs automatically at the end) or press a button above.</div>';return}
+ const mx=Math.max(1,...arr(a.gaps).map(g=>g.jobs));
+ $("#ab").innerHTML=`<div class="card"><h2>Summary <span class="pill">${a.jobs} JDs · ${new Date(a.created).toLocaleString()}</span></h2><p>${esc(ad.summary)}</p></div>
+ <div class="grid g2" style="margin-top:16px"><div class="card"><h2>🔴 Demanded, but not in your CV</h2>${arr(a.gaps).slice(0,18).map(g=>`<div style="margin:7px 0"><div class="row"><span class="sp">${esc(g.skill)}</span><small class="sub" style="margin:0">${g.jobs} JDs${g.required_in?` · ${g.required_in} required`:""}</small></div><div class="bar" style="margin-top:3px"><i style="width:${g.jobs/mx*100}%;background:linear-gradient(90deg,#f87171,#fbbf24)"></i></div></div>`).join("")||'<div class="sub">None – great.</div>'}</div>
+ <div class="card"><h2>🟢 Your strengths the market wants</h2>${arr(a.strengths).map(g=>`<span class="tag m">${esc(g.skill)} · ${g.jobs}</span>`).join("")||'<div class="sub">–</div>'}</div></div>
+ <h2 style="margin-top:22px">📚 What to learn next</h2><div class="grid g2">${arr(ad.priority_skills).map((p,i)=>`<div class="card"><div class="row"><b style="font-size:16px">${i+1}. ${esc(p.skill)}</b><div class="sp"></div><span class="pill acc">~${esc(p.hours)} h</span></div><p class="sub" style="margin:6px 0">${esc(p.why)}</p><div>${esc(p.how_to_learn)}</div></div>`).join("")}</div>
+ <h2 style="margin-top:22px">🛠️ Projects to build next</h2><div class="grid g2">${arr(ad.projects).map(p=>`<div class="card"><div class="row"><b style="font-size:16px">${esc(p.name)}</b><div class="sp"></div><span class="pill">${esc(p.time_days)} days</span></div><p>${esc(p.pitch)}</p>
+ <div>${arr(p.skills_covered).map(s=>`<span class="tag m">${esc(s)}</span>`).join("")}</div><ol style="padding-left:18px;color:var(--mut)">${arr(p.build).map(s=>`<li>${esc(s)}</li>`).join("")}</ol>
+ <div class="sug" style="margin:0"><small class="sub">Add to your CV only AFTER you really built it:</small><div class="p">${esc(p.cv_bullet_after)}</div></div></div>`).join("")}</div>
+ <div class="grid g2" style="margin-top:16px"><div class="card"><h2>🗓️ 8-week plan</h2>${arr(ad.plan_8_weeks).map(w=>`<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line);align-items:flex-start"><span class="pill acc">Wk ${esc(w.weeks)}</span><div class="sp">${esc(w.focus)}</div></div>`).join("")}</div>
+ <div class="card"><h2>✍️ CV advice</h2><ul style="padding-left:18px">${arr(ad.cv_advice).map(c=>`<li style="margin:6px 0">${esc(c)}</li>`).join("")}</ul><small class="sub">A copy is also saved as Skills_Audit.md in today's output folder.</small></div></div>`}
+
 load();
 </script></body></html>
